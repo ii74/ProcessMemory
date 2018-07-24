@@ -5,6 +5,8 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using System.Threading;
+
 
 namespace ProcessMemory
 {
@@ -58,24 +60,30 @@ namespace ProcessMemory
         public IntPtr Handle => processHandle;
         public Process Process => process;
 
-        public ProcessStream(Process process) {
+        public ProcessStream(Process process)
+        {
             this.process = process;
             processHandle = OpenProcess(ProcessAccessFlags.All, false, process.Id);
         }
 
-        public List<MEMORY_BASIC_INFORMATION> QueryMemoryRegions() {
+        public List<MEMORY_BASIC_INFORMATION> QueryMemoryRegions()
+        {
             long currentAddress = 0;
             MEMORY_BASIC_INFORMATION MemInfo = new MEMORY_BASIC_INFORMATION();
             List<MEMORY_BASIC_INFORMATION> regions = new List<MEMORY_BASIC_INFORMATION>();
 
-            while (true) {
-                try {
+            while (true)
+            {
+                try
+                {
                     int MemDump = VirtualQueryEx(Handle, (IntPtr)currentAddress, out MemInfo, 28);
                     if (MemDump == 0) break;
                     if ((MemInfo.State & 0x1000) != 0 && (MemInfo.Protect & 0x100) == 0)
                         regions.Add(MemInfo);
                     currentAddress = (long)MemInfo.BaseAddress + (long)MemInfo.RegionSize;
-                } catch {
+                }
+                catch
+                {
                     break;
                 }
             }
@@ -83,17 +91,20 @@ namespace ProcessMemory
             return regions;
         }
 
-        public uint WriteMemory(long address, byte[] data, uint length) {
+        public uint WriteMemory(long address, byte[] data, uint length)
+        {
             UIntPtr bytesWritten;
             WriteProcessMemory(processHandle, (IntPtr)address, data, length, out bytesWritten);
             return bytesWritten.ToUInt32();
         }
 
-        public long PatternScan(IMemoryPattern pattern) {
+        public long PatternScan(IMemoryPattern pattern)
+        {
             return PatternScan(pattern, 4096 * 2, 0x100000000);
         }
 
-        public long PatternScan(IMemoryPattern pattern, int scanBufferSize, long scanSize) {
+        public long PatternScan(IMemoryPattern pattern, int scanBufferSize, long scanSize)
+        {
             long startAddress = (long)process.MainModule.EntryPointAddress;
             long endAddress = startAddress + scanSize;
 
@@ -101,7 +112,8 @@ namespace ProcessMemory
 
             byte[] buffer = new byte[scanBufferSize];
 
-            while (currentAddress < endAddress) {
+            while (currentAddress < endAddress)
+            {
                 ReadMemory(currentAddress, buffer, scanBufferSize);
                 long index = pattern.FindMatch(buffer, buffer.Length);
                 if (index != -1)
@@ -112,40 +124,120 @@ namespace ProcessMemory
             return -1;
         }
 
-        public byte[] ReadMemory(long address, long size) {
+        public long PatternScan(IMemoryPattern pattern, long startAddress, int scanBufferSize, long scanSize)
+        {
+            // long startAddress = (long)process.MainModule.EntryPointAddress;
+            long endAddress = startAddress + scanSize;
+
+            long currentAddress = startAddress;
+
+            byte[] buffer = new byte[scanBufferSize];
+
+            while (currentAddress < endAddress)
+            {
+                ReadMemory(currentAddress, buffer, scanBufferSize);
+                long index = pattern.FindMatch(buffer, buffer.Length);
+                if (index != -1)
+                    return currentAddress + index;
+                currentAddress += scanBufferSize;
+            }
+
+            return -1;
+        }
+
+        public long PatternScan(IMemoryPattern pattern, long startAddress, int scanBufferSize, long scanSize, int ms)
+        {
+            Stopwatch stopwatch = new Stopwatch();
+            stopwatch.Start();
+            long address = -1;
+            do
+            {
+                // long startAddress = (long)process.MainModule.EntryPointAddress;
+                long endAddress = startAddress + scanSize;
+
+                long currentAddress = startAddress;
+
+                byte[] buffer = new byte[scanBufferSize];
+
+                while (currentAddress < endAddress && stopwatch.ElapsedMilliseconds < ms)
+                {
+                    ReadMemory(currentAddress, buffer, scanBufferSize);
+                    long index = pattern.FindMatch(buffer, buffer.Length);
+                    if (index != -1)
+                    {
+                        // return currentAddress + index;
+                        address = currentAddress + index;
+                        break;
+                    }
+                    currentAddress += scanBufferSize;
+                }
+
+            } while (address == -1 && stopwatch.ElapsedMilliseconds < ms);
+
+            stopwatch.Stop();
+
+            return address;
+        }
+
+        public byte[] ReadMemory(long address, long size)
+        {
             byte[] ret = new byte[size];
             IntPtr read;
             ReadProcessMemory(processHandle, (IntPtr)address, ret, (IntPtr)size, out read);
             return ret;
         }
 
-        public long ReadMemory(long address, byte[] buffer, long size) {
+        public long ReadMemory(long address, byte[] buffer, long size)
+        {
             IntPtr read;
             ReadProcessMemory(processHandle, (IntPtr)address, buffer, (IntPtr)size, out read);
             return (long)read;
         }
 
-        public float ReadFloat(long address) {
+        public float ReadFloat(long address)
+        {
             return BitConverter.ToSingle(ReadMemory(address, sizeof(float)), 0);
         }
 
-        public int ReadInt32(long address) {
+        public int ReadInt32(long address)
+        {
             return BitConverter.ToInt32(ReadMemory(address, sizeof(int)), 0);
         }
 
-        public uint ReadUInt32(long address) {
+        public uint ReadUInt32(long address)
+        {
             return BitConverter.ToUInt32(ReadMemory(address, sizeof(uint)), 0);
         }
 
-        public long ReadInt64(long address) {
+        public long ReadInt64(long address)
+        {
             return BitConverter.ToInt64(ReadMemory(address, sizeof(long)), 0);
         }
-        public ulong ReadUInt64(long address) {
+        public ulong ReadUInt64(long address)
+        {
             return BitConverter.ToUInt64(ReadMemory(address, sizeof(ulong)), 0);
         }
 
-        public double ReadDouble(long address) {
+        public double ReadDouble(long address)
+        {
             return BitConverter.ToDouble(ReadMemory(address, sizeof(double)), 0);
         }
+
+        /* Add your Vector3 to enable this one */
+        /*public Vector3 ReadVector3(long address)
+        {
+            //3 floats contiguously in memory
+            byte[] buffer = new byte[3 * 4];
+
+            //read memory into buffer
+            Global.stream.ReadMemory(address, buffer, 3 * 4);
+
+            //convert bytes to floats
+            return new Vector3(
+                BitConverter.ToSingle(buffer, (0 * 4)),
+                BitConverter.ToSingle(buffer, (1 * 4)),
+                BitConverter.ToSingle(buffer, (2 * 4))
+            );
+        }*/
     }
 }
